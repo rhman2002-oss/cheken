@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-cairo), ui-sans-serif, system-ui, sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+
+  --color-fire-red: var(--fire-red);
+  --color-fire-orange: var(--fire-orange);
+  --color-fire-yellow: var(--fire-yellow);
+  --color-ember: var(--ember);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.4);
+}
+
+:root {
+  color-scheme: dark;
+  --radius: 1rem;
+
+  --background: oklch(0.16 0.02 45);
+  --foreground: oklch(0.97 0.01 70);
+
+  --card: oklch(0.21 0.025 45);
+  --card-foreground: oklch(0.97 0.01 70);
+
+  --primary: oklch(0.7 0.2 45);
+  --primary-foreground: oklch(0.16 0.02 45);
+
+  --muted: oklch(0.26 0.02 45);
+  --muted-foreground: oklch(0.72 0.03 60);
+
+  --border: oklch(1 0 0 / 10%);
+  --ring: oklch(0.7 0.2 45);
+
+  --fire-red: oklch(0.62 0.23 25);
+  --fire-orange: oklch(0.74 0.19 55);
+  --fire-yellow: oklch(0.86 0.16 85);
+  --ember: oklch(0.55 0.22 30);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    overflow-x: hidden;
+  }
+}
+
+/* Slowly drifting fire gradient mesh */
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-gradient {
+  background-size: 300% 300%;
+  animation: gradientShift 12s ease infinite;
+}
+
+/* Light streak crossing the screen */
+@keyframes lightStreak {
+  0% {
+    transform: translateX(120%) skewX(-18deg);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.7;
+  }
+  20% {
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(-220%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+.animate-streak {
+  animation: lightStreak 7s ease-in-out infinite;
+}
+
+/* Faint moving grid overlay */
+.grid-overlay {
+  background-image:
+    linear-gradient(to right, oklch(1 0 0 / 6%) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(1 0 0 / 6%) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+}
+
+/* Rotating conic glow for the WhatsApp button border */
+@keyframes borderSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-border-spin {
+  animation: borderSpin 4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-gradient,
+  .animate-streak,
+  .animate-border-spin {
+    animation: none;
+  }
+}
