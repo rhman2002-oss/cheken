@@ -132,3 +132,31 @@ ${data.notes ? `📝 *ملاحظات إضافية:*\n${data.notes}\n------------
 
   return createWhatsAppUrl(phoneNumber, message);
 }
+
+/**
+ * إضافة بصمة زمنية (Cache Buster) لرابط الصورة لضمان تحديثها فورياً عبر جميع الأجهزة والمتصفحات والـ CDN
+ */
+export function withCacheBuster(url: string, customTimestamp?: number): string {
+  if (!url || typeof url !== "string") return url;
+
+  // إذا كانت الصورة بتنسيق Base64 أو Blob، فلا تحتاج إلى Cache Buster
+  if (url.startsWith("data:") || url.startsWith("blob:")) {
+    return url;
+  }
+
+  const timestamp = customTimestamp || Date.now();
+
+  try {
+    // إزالة أي بصمة سابقة v=... أو _t=...
+    const cleanUrl = url
+      .replace(/([?&])(v|_t)=\d+(&?)/, (match, prefix, param, suffix) => {
+        return suffix ? prefix : "";
+      })
+      .replace(/[?&]$/, "");
+
+    const separator = cleanUrl.includes("?") ? "&" : "?";
+    return `${cleanUrl}${separator}v=${timestamp}`;
+  } catch {
+    return url;
+  }
+}

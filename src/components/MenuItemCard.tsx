@@ -94,8 +94,8 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
           )}
         </div>
 
-        {/* شارة السعرات الحرارية */}
-        {item.calories !== undefined && (
+        {/* شارة السعرات الحرارية - تظهر فقط إذا كانت أكبر من صفر */}
+        {Boolean(item.calories && item.calories > 0) && (
           <div className="absolute bottom-2.5 end-2.5 z-10">
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-badge text-[10px] sm:text-[11px] font-semibold bg-black/60 text-white backdrop-blur-md">
               <Flame className="w-3 h-3 text-secondary" />

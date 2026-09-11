@@ -3,7 +3,6 @@ import { Header } from "@/components/Header";
 import { Hero } from "@/components/Hero";
 import { MenuSection } from "@/components/MenuSection";
 import { Footer } from "@/components/Footer";
-import { FloatingWhatsApp } from "@/components/FloatingWhatsApp";
 import { FloatingCartBar } from "@/components/FloatingCartBar";
 import { CartModal } from "@/components/CartModal";
 import { CustomerAuthModal } from "@/components/CustomerAuthModal";
@@ -27,9 +26,6 @@ export default function MenuPage() {
 
         {/* تذييل الصفحة وساعات الدوام والتواصل */}
         <Footer />
-
-        {/* زر الواتساب العائم للتواصل السريع */}
-        <FloatingWhatsApp />
 
         {/* شريط السلة العائم للطلبات */}
         <FloatingCartBar />

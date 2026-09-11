@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -40,11 +40,16 @@ import {
   Bike,
   Key,
   Share2,
+  ChevronDown,
+  FolderTree,
+  ArrowUp,
+  ArrowDown,
+  AlertTriangle,
 } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
 import { RestaurantDataProvider, useRestaurant } from "@/context/RestaurantDataContext";
-import { MenuItem, MenuMode, Discount, Order, OrderStatus, CheckoutMethod, Driver } from "@/config/restaurant";
-import { formatPrice, getDiscountedPrice } from "@/lib/utils";
+import { MenuItem, Category, MenuMode, Discount, Order, OrderStatus, CheckoutMethod, Driver } from "@/config/restaurant";
+import { formatPrice, getDiscountedPrice, withCacheBuster } from "@/lib/utils";
 import { getOrders, updateOrderStatus, playNewOrderSound, clearAllOrders } from "@/lib/ordersService";
 import { getDrivers, createDriver, updateDriver, deleteDriver, assignDriverToOrder } from "@/lib/driversService";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
@@ -60,12 +65,16 @@ function AdminDashboardContent() {
     addMenuItem,
     updateMenuItem,
     deleteMenuItem,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    reorderCategories,
     toggleItemAvailability,
     updateItemDiscount,
   } = useRestaurant();
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [activeTab, setActiveTab] = useState<"orders" | "mode" | "items" | "general" | "images" | "qrcode" | "drivers">("orders");
+  const [activeTab, setActiveTab] = useState<"orders" | "mode" | "items" | "categories" | "general" | "images" | "qrcode" | "drivers">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [isClearingOrders, setIsClearingOrders] = useState(false);
@@ -120,6 +129,32 @@ function AdminDashboardContent() {
     badge: "",
     isAvailable: true,
   });
+
+  // حالة القائمة المنسدلة للقسم (البحث والإنشاء)
+  const [categorySearch, setCategorySearch] = useState("");
+  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
+  const categoryComboboxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        categoryComboboxRef.current &&
+        !categoryComboboxRef.current.contains(event.target as Node)
+      ) {
+        setIsCategoryDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // حالات إدارة الأقسام
+  const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
+  const [newCategoryNameInput, setNewCategoryNameInput] = useState("");
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [editCategoryNameInput, setEditCategoryNameInput] = useState("");
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+  const [deleteCategoryBlocked, setDeleteCategoryBlocked] = useState<Category | null>(null);
 
   // حالة نافذة الخصم السريع
   const [discountModalItem, setDiscountModalItem] = useState<MenuItem | null>(null);
@@ -304,6 +339,8 @@ function AdminDashboardContent() {
   // فتح نافذة صنف جديد
   const handleOpenNewItemModal = () => {
     setEditingItem(null);
+    setCategorySearch("");
+    setIsCategoryDropdownOpen(false);
     setItemFormData({
       name: "",
       description: "",
@@ -320,6 +357,8 @@ function AdminDashboardContent() {
   // فتح نافذة تعديل صنف
   const handleOpenEditItemModal = (item: MenuItem) => {
     setEditingItem(item);
+    setCategorySearch("");
+    setIsCategoryDropdownOpen(false);
     setItemFormData({
       name: item.name,
       description: item.description,
@@ -336,10 +375,12 @@ function AdminDashboardContent() {
   // حفظ الصنف (جديد أو تعديل)
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
+    const finalImage = withCacheBuster(itemFormData.image);
     if (editingItem) {
       await updateMenuItem({
         ...editingItem,
         ...itemFormData,
+        image: finalImage,
         price: Number(itemFormData.price),
         calories: Number(itemFormData.calories),
       });
@@ -347,6 +388,7 @@ function AdminDashboardContent() {
     } else {
       await addMenuItem({
         ...itemFormData,
+        image: finalImage,
         price: Number(itemFormData.price),
         calories: Number(itemFormData.calories),
       });
@@ -398,6 +440,84 @@ function AdminDashboardContent() {
       },
     });
     showToast("تم حفظ بيانات المطعم بنجاح ✓");
+  };
+
+  // دوال إدارة الأقسام
+  const handleCreateNewCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newCategoryNameInput.trim();
+    if (!trimmed) {
+      showToast("يرجى إدخال اسم القسم");
+      return;
+    }
+    const existing = data.categories.find(
+      (c) => c.name.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      showToast("⚠️ يوجد قسم مسجل بهذا الاسم مسبقاً");
+      return;
+    }
+    await addCategory(trimmed);
+    setNewCategoryNameInput("");
+    setIsAddCategoryModalOpen(false);
+    showToast(`تمت إضافة قسم "${trimmed}" بنجاح ✓`);
+  };
+
+  const handleUpdateCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCategory) return;
+    const trimmed = editCategoryNameInput.trim();
+    if (!trimmed) {
+      showToast("يرجى إدخال اسم القسم");
+      return;
+    }
+    const existing = data.categories.find(
+      (c) =>
+        c.id !== editingCategory.id &&
+        c.name.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      showToast("⚠️ يوجد قسم آخر مسجل بهذا الاسم مسبقاً");
+      return;
+    }
+    await updateCategory(editingCategory.id, trimmed);
+    setEditingCategory(null);
+    setEditCategoryNameInput("");
+    showToast("تم تعديل اسم القسم بنجاح ✓");
+  };
+
+  const handleDeleteCategoryClick = (category: Category) => {
+    if (category.items && category.items.length > 0) {
+      // حماية صارمة: عرض رسالة التنبيه بالمنع
+      setDeleteCategoryBlocked(category);
+    } else {
+      // فارغ: فتح نافذة التأكيد
+      setCategoryToDelete(category);
+    }
+  };
+
+  const handleConfirmDeleteCategory = async () => {
+    if (!categoryToDelete) return;
+    const success = await deleteCategory(categoryToDelete.id);
+    if (success) {
+      showToast(`تم حذف قسم "${categoryToDelete.name}" بنجاح ✓`);
+    } else {
+      showToast("لا يمكن حذف القسم لأنه يحتوي على أصناف");
+    }
+    setCategoryToDelete(null);
+  };
+
+  const handleMoveCategory = async (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= data.categories.length) return;
+
+    const newCategories = [...data.categories];
+    const temp = newCategories[index];
+    newCategories[index] = newCategories[targetIndex];
+    newCategories[targetIndex] = temp;
+
+    await reorderCategories(newCategories);
+    showToast("تم حفظ ترتيب الأقسام بنجاح ✓");
   };
 
   // محاكاة رفع صورة
@@ -627,6 +747,19 @@ function AdminDashboardContent() {
           >
             <Utensils className="w-4 h-4" />
             <span>إدارة الأصناف والخصومات</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("categories")}
+            className={`min-h-[42px] px-3.5 sm:px-4 py-2 rounded-btn text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
+              activeTab === "categories"
+                ? "bg-primary text-white shadow-xs"
+                : "bg-bg-page text-text-muted hover:text-text-main"
+            }`}
+          >
+            <FolderTree className="w-4 h-4" />
+            <span>إدارة الأقسام</span>
           </button>
 
           <button
@@ -1612,6 +1745,141 @@ function AdminDashboardContent() {
         )}
 
         {/* ============================================================
+            التبويب: إدارة وتنظيم الأقسام
+           ============================================================ */}
+        {activeTab === "categories" && (
+          <div className="space-y-6">
+            {/* بطاقة رأس التبويب */}
+            <div className="bg-surface rounded-card p-5 sm:p-6 border border-border-subtle shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <h2 className="text-base sm:text-xl font-black text-text-main flex items-center gap-2">
+                  <FolderTree className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+                  <span>إدارة وتنظيم أقسام المنيو</span>
+                </h2>
+                <p className="text-xs sm:text-sm text-text-muted mt-1">
+                  أضف أقساماً جديدة، عدّل أسماء الأقسام، رتّب تسلسل ظهورها في المنيو للزبائن، أو احذف الأقسام الفارغة.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setNewCategoryNameInput("");
+                  setIsAddCategoryModalOpen(true);
+                }}
+                className="min-h-[44px] px-4 py-2.5 rounded-btn bg-primary hover:bg-primary-hover text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs shrink-0 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة قسم جديد</span>
+              </button>
+            </div>
+
+            {/* قائمة الأقسام */}
+            <div className="space-y-3">
+              {data.categories.map((category, index) => {
+                const itemCount = category.items ? category.items.length : 0;
+                const hasItems = itemCount > 0;
+
+                return (
+                  <div
+                    key={category.id}
+                    className="p-4 sm:p-5 rounded-card bg-surface border border-border-subtle shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-primary/30 transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      {/* أسهم الترتيب */}
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleMoveCategory(index, "up")}
+                          disabled={index === 0}
+                          title="تحريك لأعلى في المنيو"
+                          className="p-1 rounded bg-bg-page hover:bg-border-subtle text-text-muted hover:text-text-main disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveCategory(index, "down")}
+                          disabled={index === data.categories.length - 1}
+                          title="تحريك لأسفل في المنيو"
+                          className="p-1 rounded bg-bg-page hover:bg-border-subtle text-text-muted hover:text-text-main disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* أيقونة القسم */}
+                      <div className="w-11 h-11 rounded-badge bg-primary-light text-primary text-xl flex items-center justify-center shrink-0 border border-primary/15">
+                        {category.icon || "🍽️"}
+                      </div>
+
+                      {/* تفاصيل القسم */}
+                      <div className="min-w-0">
+                        <h3 className="font-extrabold text-sm sm:text-base text-text-main truncate">
+                          {category.name}
+                        </h3>
+                        <div className="mt-1 flex items-center gap-2">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                              hasItems
+                                ? "bg-primary-light text-primary border border-primary/20"
+                                : "bg-bg-page text-text-muted border border-border-subtle"
+                            }`}
+                          >
+                            {itemCount === 0
+                              ? "0 صنف (قسم فارغ)"
+                              : itemCount === 1
+                              ? "صنف واحد"
+                              : itemCount === 2
+                              ? "صنفان"
+                              : itemCount <= 10
+                              ? `${itemCount} أصناف`
+                              : `${itemCount} صنف`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* أزرار الإجراءات */}
+                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCategory(category);
+                          setEditCategoryNameInput(category.name);
+                        }}
+                        className="min-h-[40px] px-3.5 py-2 rounded-btn bg-bg-page hover:bg-border-subtle text-text-main text-xs font-bold flex items-center gap-1.5 border border-border-subtle transition-colors"
+                      >
+                        <Edit2 className="w-3.5 h-3.5 text-primary" />
+                        <span>تعديل الاسم</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCategoryClick(category)}
+                        title={
+                          hasItems
+                            ? "لا يمكن حذف قسم يحتوي على أصناف"
+                            : "حذف هذا القسم الفارغ"
+                        }
+                        className={`min-h-[40px] px-3.5 py-2 rounded-btn text-xs font-bold flex items-center gap-1.5 transition-colors border ${
+                          hasItems
+                            ? "bg-bg-page text-text-muted border-border-subtle hover:text-amber-600 hover:border-amber-300"
+                            : "bg-red-500/10 hover:bg-red-500/20 text-red-600 border-red-500/30"
+                        }`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>حذف القسم</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================
             التبويب 3: بيانات المطعم العامة
            ============================================================ */}
         {activeTab === "general" && (
@@ -2340,23 +2608,156 @@ function AdminDashboardContent() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-text-main mb-1">
-                  القسم التابع له
-                </label>
-                <select
-                  value={itemFormData.categoryId}
-                  onChange={(e) =>
-                    setItemFormData({ ...itemFormData, categoryId: e.target.value })
-                  }
-                  className="w-full px-3 py-2 rounded-input bg-bg-page border border-border-subtle text-xs text-text-main outline-none"
-                >
-                  {data.categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.icon} {c.name}
-                    </option>
-                  ))}
-                </select>
+              {/* حقل اختيار القسم مع ميزة البحث الفوري وإنشاء قسم جديد بنفس اللحظة */}
+              <div ref={categoryComboboxRef} className="relative">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-text-main">
+                    القسم التابع له
+                  </label>
+                  <span className="text-[10px] text-text-muted">
+                    اختر قسماً أو اكتب لإنشاء جديد
+                  </span>
+                </div>
+
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={
+                      isCategoryDropdownOpen
+                        ? categorySearch
+                        : (() => {
+                            const c = data.categories.find(
+                              (cat) => cat.id === itemFormData.categoryId
+                            );
+                            return c ? `${c.icon || "🍽️"} ${c.name}` : "";
+                          })()
+                    }
+                    placeholder="اختر قسماً أو اكتب اسم قسم جديد..."
+                    onFocus={() => {
+                      setIsCategoryDropdownOpen(true);
+                      setCategorySearch("");
+                    }}
+                    onChange={(e) => {
+                      setCategorySearch(e.target.value);
+                      if (!isCategoryDropdownOpen) setIsCategoryDropdownOpen(true);
+                    }}
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") {
+                        const trimmed = categorySearch.trim();
+                        if (trimmed) {
+                          e.preventDefault();
+                          const existing = data.categories.find(
+                            (c) => c.name.trim().toLowerCase() === trimmed.toLowerCase()
+                          );
+                          if (existing) {
+                            setItemFormData((prev) => ({ ...prev, categoryId: existing.id }));
+                            setCategorySearch("");
+                            setIsCategoryDropdownOpen(false);
+                          } else {
+                            const newId = await addCategory(trimmed);
+                            setItemFormData((prev) => ({ ...prev, categoryId: newId }));
+                            setCategorySearch("");
+                            setIsCategoryDropdownOpen(false);
+                            showToast(`تم إنشاء القسم الجديد "${trimmed}" واختياره بنجاح ✓`);
+                          }
+                        }
+                      } else if (e.key === "Escape") {
+                        setIsCategoryDropdownOpen(false);
+                      }
+                    }}
+                    className="w-full px-3 py-2 pe-9 rounded-input bg-bg-page border border-border-subtle text-xs text-text-main outline-none focus:border-primary transition-colors cursor-pointer"
+                  />
+
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => {
+                      setIsCategoryDropdownOpen((prev) => !prev);
+                      setCategorySearch("");
+                    }}
+                    className="absolute end-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main p-1 transition-transform"
+                  >
+                    <ChevronDown
+                      className={`w-4 h-4 transition-transform duration-200 ${
+                        isCategoryDropdownOpen ? "rotate-180 text-primary" : ""
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* القائمة المنسدلة للأقسام مع خيار الإنشاء */}
+                {isCategoryDropdownOpen && (() => {
+                  const filtered = data.categories.filter((cat) =>
+                    cat.name.toLowerCase().includes(categorySearch.trim().toLowerCase())
+                  );
+                  const exactExists = data.categories.some(
+                    (cat) => cat.name.trim().toLowerCase() === categorySearch.trim().toLowerCase()
+                  );
+                  const canCreate = categorySearch.trim().length > 0 && !exactExists;
+
+                  return (
+                    <div className="absolute top-full start-0 end-0 mt-1 z-30 bg-surface border border-border-subtle rounded-card shadow-2xl max-h-56 overflow-y-auto p-1.5 animate-in fade-in slide-in-from-top-1 duration-150">
+                      {filtered.length > 0 ? (
+                        <div className="space-y-0.5">
+                          {filtered.map((c) => {
+                            const isSelected = c.id === itemFormData.categoryId;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  setItemFormData((prev) => ({ ...prev, categoryId: c.id }));
+                                  setCategorySearch("");
+                                  setIsCategoryDropdownOpen(false);
+                                }}
+                                className={`w-full px-3 py-2 rounded-btn text-xs font-bold flex items-center justify-between transition-colors text-start ${
+                                  isSelected
+                                    ? "bg-primary/10 text-primary font-black"
+                                    : "hover:bg-bg-page text-text-main"
+                                }`}
+                              >
+                                <span className="flex items-center gap-2">
+                                  <span>{c.icon || "🍽️"}</span>
+                                  <span>{c.name}</span>
+                                </span>
+                                {isSelected && <Check className="w-3.5 h-3.5 text-primary" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        !canCreate && (
+                          <div className="p-3 text-center text-xs text-text-muted">
+                            لا توجد أقسام مطابقة
+                          </div>
+                        )
+                      )}
+
+                      {/* زر إنشاء قسم جديد فورياً */}
+                      {canCreate && (
+                        <div className="pt-1 mt-1 border-t border-border-subtle/80">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const trimmed = categorySearch.trim();
+                              const newId = await addCategory(trimmed);
+                              setItemFormData((prev) => ({ ...prev, categoryId: newId }));
+                              setCategorySearch("");
+                              setIsCategoryDropdownOpen(false);
+                              showToast(`تم إنشاء القسم الجديد "${trimmed}" واختياره بنجاح ✓`);
+                            }}
+                            className="w-full px-3 py-2.5 rounded-btn bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-black flex items-center gap-2 transition-colors text-start"
+                          >
+                            <Plus className="w-4 h-4 shrink-0 text-emerald-600" />
+                            <span>
+                              + إضافة قسم جديد: &quot;{categorySearch.trim()}&quot;
+                            </span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div>
@@ -2416,18 +2817,59 @@ function AdminDashboardContent() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-text-main mb-1">
-                  رابط صورة الصنف (URL)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-text-main">
+                    صورة الصنف (رابط أو رفع من الجهاز)
+                  </label>
+                  <label
+                    htmlFor="item-modal-file-upload"
+                    className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer bg-primary-light px-2 py-0.5 rounded"
+                  >
+                    <Upload className="w-3 h-3" />
+                    <span>رفع من جهازك</span>
+                  </label>
+                  <input
+                    id="item-modal-file-upload"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          const result = reader.result as string;
+                          setItemFormData({ ...itemFormData, image: result });
+                          showToast("تم اختيار صورة الصنف من جهازك بنجاح ✓");
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                </div>
                 <input
-                  type="url"
+                  type="text"
                   required
+                  placeholder="https://... أو مسار الصورة أو اختر رفع من جهازك"
                   value={itemFormData.image}
                   onChange={(e) =>
                     setItemFormData({ ...itemFormData, image: e.target.value })
                   }
                   className="w-full px-3 py-2 rounded-input bg-bg-page border border-border-subtle text-xs text-text-main outline-none dir-ltr text-left"
                 />
+                {itemFormData.image && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-border-subtle bg-bg-page shrink-0">
+                      <Image
+                        src={itemFormData.image}
+                        alt="معاينة"
+                        fill
+                        className="object-cover"
+                      />
+                    </div>
+                    <span className="text-[11px] text-text-muted">معاينة الصورة المحددة</span>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -2899,6 +3341,183 @@ function AdminDashboardContent() {
                     <span>تأكيد التصفير</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* مودال: إضافة قسم جديد */}
+      {isAddCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-surface border border-border-subtle rounded-card max-w-md w-full p-5 sm:p-6 shadow-xl animate-scaleIn">
+            <div className="flex items-center justify-between pb-4 border-b border-border-subtle mb-4">
+              <h3 className="text-base sm:text-lg font-black text-text-main flex items-center gap-2">
+                <FolderTree className="w-5 h-5 text-primary" />
+                <span>إضافة قسم جديد للمنيو</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsAddCategoryModalOpen(false)}
+                className="p-1 rounded text-text-muted hover:text-text-main"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateNewCategorySubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-text-main mb-1.5">
+                  اسم القسم الجديد <span className="text-primary">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={newCategoryNameInput}
+                  onChange={(e) => setNewCategoryNameInput(e.target.value)}
+                  placeholder="مثال: مشروبات ساخنة، مقبلات، وجبات عائلية..."
+                  className="w-full h-11 px-3.5 rounded-input bg-bg-page border border-border-subtle text-text-main text-xs sm:text-sm focus:outline-none focus:border-primary font-medium"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddCategoryModalOpen(false)}
+                  className="flex-1 min-h-[44px] px-4 rounded-btn border border-border-subtle bg-bg-page hover:bg-border-subtle text-text-main text-xs sm:text-sm font-bold transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 min-h-[44px] px-4 rounded-btn bg-primary hover:bg-primary-hover text-white text-xs sm:text-sm font-black shadow-xs transition-colors"
+                >
+                  إضافة القسم
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* مودال: تعديل اسم القسم */}
+      {editingCategory && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-surface border border-border-subtle rounded-card max-w-md w-full p-5 sm:p-6 shadow-xl animate-scaleIn">
+            <div className="flex items-center justify-between pb-4 border-b border-border-subtle mb-4">
+              <h3 className="text-base sm:text-lg font-black text-text-main flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-primary" />
+                <span>تعديل اسم القسم</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingCategory(null)}
+                className="p-1 rounded text-text-muted hover:text-text-main"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateCategorySubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-text-main mb-1.5">
+                  اسم القسم الحالي: <span className="font-extrabold text-primary">{editingCategory.name}</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={editCategoryNameInput}
+                  onChange={(e) => setEditCategoryNameInput(e.target.value)}
+                  placeholder="أدخل الاسم الجديد للقسم..."
+                  className="w-full h-11 px-3.5 rounded-input bg-bg-page border border-border-subtle text-text-main text-xs sm:text-sm focus:outline-none focus:border-primary font-medium"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingCategory(null)}
+                  className="flex-1 min-h-[44px] px-4 rounded-btn border border-border-subtle bg-bg-page hover:bg-border-subtle text-text-main text-xs sm:text-sm font-bold transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 min-h-[44px] px-4 rounded-btn bg-primary hover:bg-primary-hover text-white text-xs sm:text-sm font-black shadow-xs transition-colors"
+                >
+                  حفظ التعديل
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* مودال: تنبيه منع حذف قسم يحتوي على أصناف */}
+      {deleteCategoryBlocked && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-surface border border-amber-500/30 rounded-card max-w-md w-full p-5 sm:p-6 shadow-xl animate-scaleIn">
+            <div className="w-12 h-12 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center mx-auto mb-4 border border-amber-500/20">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-center font-black text-base sm:text-lg text-text-main mb-2">
+              لا يمكن حذف هذا القسم!
+            </h3>
+
+            <p className="text-center text-xs sm:text-sm text-text-muted leading-relaxed mb-6">
+              لا يمكن حذف قسم &quot;{deleteCategoryBlocked.name}&quot; لأنه يحتوي على{" "}
+              <strong className="text-amber-600 font-bold">
+                {deleteCategoryBlocked.items?.length || 0} صنف
+              </strong>
+              . يرجى حذف أو نقل الأصناف الموجودة بداخله أولاً.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => setDeleteCategoryBlocked(null)}
+              className="w-full min-h-[44px] px-4 rounded-btn bg-amber-500 hover:bg-amber-600 text-white text-xs sm:text-sm font-bold shadow-xs transition-colors"
+            >
+              حسناً، فهمت
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* مودال: تأكيد حذف قسم فارغ */}
+      {categoryToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-surface border border-red-500/30 rounded-card max-w-md w-full p-5 sm:p-6 shadow-xl animate-scaleIn">
+            <div className="w-12 h-12 rounded-full bg-red-500/15 text-red-600 flex items-center justify-center mx-auto mb-4 border border-red-500/20">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-center font-black text-base sm:text-lg text-text-main mb-2">
+              تأكيد حذف القسم
+            </h3>
+
+            <p className="text-center text-xs sm:text-sm text-text-muted leading-relaxed mb-6">
+              هل أنت متأكد من حذف قسم &quot;{categoryToDelete.name}&quot;؟
+              <br />
+              <span className="text-[11px] text-text-muted/80">هذا القسم فارغ حالياً وسيتم حذفه نهائياً من المنيو.</span>
+            </p>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setCategoryToDelete(null)}
+                className="flex-1 min-h-[44px] px-4 rounded-btn border border-border-subtle bg-bg-page hover:bg-border-subtle text-text-main text-xs sm:text-sm font-bold transition-colors"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteCategory}
+                className="flex-1 min-h-[44px] px-4 rounded-btn bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm font-black shadow-xs transition-colors"
+              >
+                نعم، احذف القسم
               </button>
             </div>
           </div>

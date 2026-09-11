@@ -129,8 +129,8 @@ export const ItemModal: React.FC<ItemModalProps> = ({ item, onClose }) => {
               </div>
             </div>
 
-            {/* السعرات الحرارية */}
-            {item.calories !== undefined && (
+            {/* السعرات الحرارية - تظهر فقط إذا كانت أكبر من صفر */}
+            {Boolean(item.calories && item.calories > 0) && (
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-badge bg-primary-light text-primary text-xs font-semibold mb-3">
                 <Flame className="w-3.5 h-3.5 text-secondary" />
                 <span>

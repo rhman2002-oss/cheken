@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import {
   RestaurantConfig,
   MenuItem,
+  Category,
   MenuMode,
   OrderMode,
   CheckoutMethod,
@@ -12,6 +13,7 @@ import {
   restaurantData as initialData,
 } from "@/config/restaurant";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { withCacheBuster } from "@/lib/utils";
 
 interface RestaurantDataContextType {
   data: RestaurantConfig;
@@ -25,13 +27,17 @@ interface RestaurantDataContextType {
   addMenuItem: (item: Omit<MenuItem, "id">) => Promise<void>;
   updateMenuItem: (item: MenuItem) => Promise<void>;
   deleteMenuItem: (itemId: string) => Promise<void>;
+  addCategory: (categoryName: string, icon?: string) => Promise<string>;
+  updateCategory: (categoryId: string, newName: string, icon?: string) => Promise<void>;
+  deleteCategory: (categoryId: string) => Promise<boolean>;
+  reorderCategories: (reorderedCategories: Category[]) => Promise<void>;
   toggleItemAvailability: (itemId: string) => Promise<void>;
   updateItemDiscount: (itemId: string, discount?: Discount) => Promise<void>;
   resetToDefault: () => void;
   forceOrderMode?: "delivery" | "display";
 }
 
-const STORAGE_KEY = "restaurant_menu_data_v2";
+const STORAGE_KEY = "restaurant_menu_data_v3";
 
 const RestaurantDataContext = createContext<RestaurantDataContextType | undefined>(
   undefined
@@ -231,17 +237,26 @@ export const RestaurantDataProvider: React.FC<{
   };
 
   // 3. تحديث البيانات العامة
+  // 3. تحديث البيانات العامة
   const updateGeneralInfo = async (info: Partial<RestaurantConfig>) => {
+    const processedInfo = { ...info };
+    if (processedInfo.logo) {
+      processedInfo.logo = withCacheBuster(processedInfo.logo);
+    }
+    if (processedInfo.heroImage) {
+      processedInfo.heroImage = withCacheBuster(processedInfo.heroImage);
+    }
+
     const updated: RestaurantConfig = {
       ...data,
-      ...info,
+      ...processedInfo,
       contact: {
         ...data.contact,
-        ...(info.contact || {}),
+        ...(processedInfo.contact || {}),
       },
       location: {
         ...data.location,
-        ...(info.location || {}),
+        ...(processedInfo.location || {}),
       },
     };
     await persistData(updated);
@@ -263,20 +278,163 @@ export const RestaurantDataProvider: React.FC<{
     }
   };
 
-  // 4. إضافة وجبة جديدة
-  const addMenuItem = async (newItemData: Omit<MenuItem, "id">) => {
-    const newId = `item_${Date.now()}`;
-    const newItem: MenuItem = { ...newItemData, id: newId };
+  // 4. إضافة قسم جديد
+  const addCategory = async (categoryName: string, icon?: string): Promise<string> => {
+    const trimmedName = categoryName.trim();
+    if (!trimmedName) return data.categories[0]?.id || "";
 
-    const updatedCategories = data.categories.map((cat) => {
-      if (cat.id === newItem.categoryId) {
+    // التحقق من عدم وجود قسم بنفس الاسم مسبقاً (تطابق نصي بدون تكرار)
+    const existing = data.categories.find(
+      (c) => c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (existing) {
+      return existing.id;
+    }
+
+    const newId = `cat_${Date.now()}`;
+    const newCategory = {
+      id: newId,
+      name: trimmedName,
+      icon: icon || "🍽️",
+      items: [],
+    };
+
+    const updatedCategories = [...data.categories, newCategory];
+    const updated = { ...data, categories: updatedCategories };
+    await persistData(updated);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.from("categories").insert({
+          id: newId,
+          name: trimmedName,
+          icon: newCategory.icon,
+          sort_order: updatedCategories.length,
+        });
+      } catch (err) {
+        console.warn("Supabase insert category error:", err);
+      }
+    }
+
+    return newId;
+  };
+
+  // 4.1 تعديل اسم/أيقونة قسم
+  const updateCategory = async (
+    categoryId: string,
+    newName: string,
+    icon?: string
+  ): Promise<void> => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    const updatedCategories = data.categories.map((c) => {
+      if (c.id === categoryId) {
         return {
-          ...cat,
-          items: [newItem, ...cat.items],
+          ...c,
+          name: trimmed,
+          ...(icon !== undefined ? { icon } : {}),
         };
       }
-      return cat;
+      return c;
     });
+
+    const updated = { ...data, categories: updatedCategories };
+    await persistData(updated);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from("categories")
+          .update({
+            name: trimmed,
+            ...(icon !== undefined ? { icon } : {}),
+          })
+          .eq("id", categoryId);
+      } catch (err) {
+        console.warn("Supabase update category error:", err);
+      }
+    }
+  };
+
+  // 4.2 حذف قسم (حصراً إذا كان فارغاً وبدون أي أصناف)
+  const deleteCategory = async (categoryId: string): Promise<boolean> => {
+    const target = data.categories.find((c) => c.id === categoryId);
+    if (!target) return false;
+
+    // حماية صارمة: منع حذف أي قسم يحتوي على أصناف
+    if (target.items && target.items.length > 0) {
+      return false;
+    }
+
+    const updatedCategories = data.categories.filter((c) => c.id !== categoryId);
+    const updated = { ...data, categories: updatedCategories };
+    await persistData(updated);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.from("categories").delete().eq("id", categoryId);
+      } catch (err) {
+        console.warn("Supabase delete category error:", err);
+      }
+    }
+
+    return true;
+  };
+
+  // 4.3 إعادة ترتيب الأقسام
+  const reorderCategories = async (reorderedCategories: Category[]): Promise<void> => {
+    const updated = { ...data, categories: reorderedCategories };
+    await persistData(updated);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const client = supabase;
+        await Promise.all(
+          reorderedCategories.map((c, idx) =>
+            client
+              .from("categories")
+              .update({ sort_order: idx })
+              .eq("id", c.id)
+          )
+        );
+      } catch (err) {
+        console.warn("Supabase reorder categories error:", err);
+      }
+    }
+  };
+
+  // 5. إضافة وجبة جديدة
+  const addMenuItem = async (newItemData: Omit<MenuItem, "id">) => {
+    const newId = `item_${Date.now()}`;
+    const newItem: MenuItem = {
+      ...newItemData,
+      id: newId,
+      image: withCacheBuster(newItemData.image),
+    };
+
+    const categoryExists = data.categories.some((cat) => cat.id === newItem.categoryId);
+    let updatedCategories;
+
+    if (categoryExists) {
+      updatedCategories = data.categories.map((cat) => {
+        if (cat.id === newItem.categoryId) {
+          return {
+            ...cat,
+            items: [newItem, ...cat.items],
+          };
+        }
+        return cat;
+      });
+    } else {
+      const newCategory = {
+        id: newItem.categoryId,
+        name: "قسم جديد",
+        icon: "🍽️",
+        items: [newItem],
+      };
+      updatedCategories = [...data.categories, newCategory];
+    }
 
     const updated = { ...data, categories: updatedCategories };
     await persistData(updated);
@@ -301,10 +459,15 @@ export const RestaurantDataProvider: React.FC<{
 
   // 5. تعديل وجبة
   const updateMenuItem = async (updatedItem: MenuItem) => {
+    const itemWithFreshCacheBuster: MenuItem = {
+      ...updatedItem,
+      image: withCacheBuster(updatedItem.image),
+    };
+
     const updatedCategories = data.categories.map((cat) => ({
       ...cat,
       items: cat.items.map((item) =>
-        item.id === updatedItem.id ? updatedItem : item
+        item.id === itemWithFreshCacheBuster.id ? itemWithFreshCacheBuster : item
       ),
     }));
 
@@ -315,18 +478,18 @@ export const RestaurantDataProvider: React.FC<{
       await supabase
         .from("menu_items")
         .update({
-          name: updatedItem.name,
-          description: updatedItem.description,
-          price: updatedItem.price,
-          image: updatedItem.image,
-          badge: updatedItem.badge,
-          calories: updatedItem.calories,
-          is_available: updatedItem.isAvailable,
-          discount_type: updatedItem.discount?.type || null,
-          discount_value: updatedItem.discount?.value || 0,
-          discount_active: updatedItem.discount?.active || false,
+          name: itemWithFreshCacheBuster.name,
+          description: itemWithFreshCacheBuster.description,
+          price: itemWithFreshCacheBuster.price,
+          image: itemWithFreshCacheBuster.image,
+          badge: itemWithFreshCacheBuster.badge,
+          calories: itemWithFreshCacheBuster.calories,
+          is_available: itemWithFreshCacheBuster.isAvailable,
+          discount_type: itemWithFreshCacheBuster.discount?.type || null,
+          discount_value: itemWithFreshCacheBuster.discount?.value || 0,
+          discount_active: itemWithFreshCacheBuster.discount?.active || false,
         })
-        .eq("id", updatedItem.id);
+        .eq("id", itemWithFreshCacheBuster.id);
     }
   };
 
@@ -416,6 +579,10 @@ export const RestaurantDataProvider: React.FC<{
         addMenuItem,
         updateMenuItem,
         deleteMenuItem,
+        addCategory,
+        updateCategory,
+        deleteCategory,
+        reorderCategories,
         toggleItemAvailability,
         updateItemDiscount,
         resetToDefault,

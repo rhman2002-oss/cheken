@@ -3,7 +3,6 @@ import { Header } from "@/components/Header";
 import { Hero } from "@/components/Hero";
 import { MenuSection } from "@/components/MenuSection";
 import { Footer } from "@/components/Footer";
-import { FloatingWhatsApp } from "@/components/FloatingWhatsApp";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { Providers } from "@/components/Providers";
 
@@ -23,9 +22,6 @@ export default function InStoreMenuDisplayPage() {
 
         {/* تذييل الصفحة وساعات العمل ومعلومات التواصل */}
         <Footer />
-
-        {/* زر الواتساب العائم للتواصل المباشر مع الإدارة */}
-        <FloatingWhatsApp />
       </main>
     </Providers>
   );
